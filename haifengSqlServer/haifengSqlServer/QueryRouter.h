@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <string>
 #include <vector>
 #include <map>
@@ -16,8 +16,8 @@ struct QuerySpec {
 class QueryRouter {
 public:
     static QueryRouter& instance();
-    bool load(const std::wstring& path);
-    bool loadDir(const std::wstring& dir);
+    bool load(const std::string& path);
+    bool loadDir(const std::string& dir);
     std::string handle(const std::string& msg);
     size_t count() const;
 private:

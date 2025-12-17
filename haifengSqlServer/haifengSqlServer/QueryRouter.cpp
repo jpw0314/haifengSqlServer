@@ -1,4 +1,4 @@
-#define WIN32_LEAN_AND_MEAN
+﻿#define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #ifndef _WINSOCKAPI_
 #define _WINSOCKAPI_
@@ -14,26 +14,6 @@
 #include <mutex>
 #include "QueryRouter.h"
 #include "DbClient.h"
-
-static std::wstring u8tow(const std::string& s) {
-    if (s.empty()) return std::wstring();
-    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
-    if (n <= 0) return std::wstring();
-    std::wstring out; out.resize(n);
-    int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &out[0], n);
-    if (len > 0) out.resize(len - 1); else out.clear();
-    return out;
-}
-
-static std::string w2u8(const std::wstring& ws) {
-    if (ws.empty()) return std::string();
-    int n = WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (n <= 0) return std::string();
-    std::string out; out.resize(n);
-    int len = WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), -1, &out[0], n, nullptr, nullptr);
-    if (len > 0) out.resize(len - 1); else out.clear();
-    return out;
-}
 
 static std::string trim(const std::string& s) {
     size_t a = 0; while (a < s.size() && (s[a]==' '||s[a]=='\t' || s[a]=='\r')) a++;
@@ -51,15 +31,8 @@ QueryRouter& QueryRouter::instance() { static QueryRouter inst; return inst; }
 QueryRouter::QueryRouter() = default;
 size_t QueryRouter::count() const { return specs.size(); }
 
-static bool parseIniInto(std::map<std::string, QuerySpec>& specs, const std::wstring& path) {
-    std::ifstream f;
-    int n = WideCharToMultiByte(CP_UTF8, 0, path.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (n > 0) {
-        std::string p; p.resize(n);
-        WideCharToMultiByte(CP_UTF8, 0, path.c_str(), -1, &p[0], n, nullptr, nullptr);
-        if (p.size() && p.back()=='\0') p.pop_back();
-        f.open(p);
-    }
+static bool parseIniInto(std::map<std::string, QuerySpec>& specs, const std::string& path) {
+    std::ifstream f(path);
     if (!f.is_open()) return false;
     std::string line; std::string cur;
     QuerySpec q;
@@ -108,34 +81,27 @@ static bool parseIniInto(std::map<std::string, QuerySpec>& specs, const std::wst
     return true;
 }
 
-bool QueryRouter::loadDir(const std::wstring& dir) {
+bool QueryRouter::loadDir(const std::string& dir) {
     specs.clear();
-    std::wstring pattern = dir;
-    if (!pattern.empty() && pattern.back() != L'\\' && pattern.back() != L'/') pattern += L"\\";
-    pattern += L"*.ini";
-    WIN32_FIND_DATAW fd; HANDLE h = FindFirstFileW(pattern.c_str(), &fd);
+    std::string pattern = dir;
+    if (!pattern.empty() && pattern.back() != '\\' && pattern.back() != '/') pattern += "\\";
+    pattern += "*.ini";
+    WIN32_FIND_DATAA fd; HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
     if (h == INVALID_HANDLE_VALUE) return false;
     do {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-        std::wstring path = dir;
-        if (!path.empty() && path.back() != L'\\' && path.back() != L'/') path += L"\\";
+        std::string path = dir;
+        if (!path.empty() && path.back() != '\\' && path.back() != '/') path += "\\";
         path += fd.cFileName;
         parseIniInto(specs, path);
-    } while (FindNextFileW(h, &fd));
+    } while (FindNextFileA(h, &fd));
     FindClose(h);
     return !specs.empty();
 }
 
-bool QueryRouter::load(const std::wstring& path) {
+bool QueryRouter::load(const std::string& path) {
     specs.clear();
-    std::ifstream f;
-    int n = WideCharToMultiByte(CP_UTF8, 0, path.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (n > 0) {
-        std::string p; p.resize(n);
-        WideCharToMultiByte(CP_UTF8, 0, path.c_str(), -1, &p[0], n, nullptr, nullptr);
-        if (p.size() && p.back()=='\0') p.pop_back();
-        f.open(p);
-    }
+    std::ifstream f(path);
     if (!f.is_open()) return false;
     std::string line; std::string cur;
     QuerySpec q;
@@ -203,14 +169,14 @@ static std::string odbcErrors(SQLSMALLINT type, SQLHANDLE handle) {
     std::string out;
     SQLSMALLINT i = 1;
     for (;;) {
-        SQLWCHAR state[6] = {0};
+        SQLCHAR state[6] = {0};
         SQLINTEGER native = 0;
-        SQLWCHAR text[512] = {0};
+        SQLCHAR text[512] = {0};
         SQLSMALLINT len = 0;
-        SQLRETURN rc = SQLGetDiagRecW(type, handle, i, state, &native, text, (SQLSMALLINT)(sizeof(text)/sizeof(SQLWCHAR)), &len);
+        SQLRETURN rc = SQLGetDiagRecA(type, handle, i, state, &native, text, (SQLSMALLINT)(sizeof(text)), &len);
         if (rc != SQL_SUCCESS) break;
-        std::string s = w2u8(std::wstring(state));
-        std::string m = w2u8(std::wstring(text));
+        std::string s = std::string(reinterpret_cast<char*>(state));
+        std::string m = std::string(reinterpret_cast<char*>(text));
         if (!out.empty()) out += " | ";
         out += std::string("SQLSTATE=") + s + std::string(", native=") + std::to_string(native) + std::string(", message=") + m;
         i++;
@@ -245,18 +211,18 @@ std::string QueryRouter::handle(const std::string& msg) {
             DbClient::instance().closeTemp(hdbc);
             return std::string("{\"ok\":false,\"error\":\"stmt alloc failed\"}");
         }
-        std::wstring wsql = u8tow(q.sql);
-        std::wstring v;
+        std::string sql =q.sql;
+        std::string v;
         std::string out;
-        if (SQLExecDirectW(stmt, (SQLWCHAR*)wsql.c_str(), SQL_NTS) == SQL_SUCCESS) {
+        if (SQLExecDirectA(stmt, (SQLCHAR*)sql.c_str(), SQL_NTS) == SQL_SUCCESS) {
             if (SQLFetch(stmt) == SQL_SUCCESS) {
-                wchar_t buf[256] = {0};
+                char buf[256] = {0};
                 SQLLEN ind = 0;
-                if (SQLGetData(stmt, 1, SQL_C_WCHAR, buf, sizeof(buf), &ind) == SQL_SUCCESS) {
-                    v = std::wstring(buf);
+                if (SQLGetData(stmt, 1, SQL_C_CHAR, buf, sizeof(buf), &ind) == SQL_SUCCESS) {
+                    v = std::string(buf);
                 }
             }
-            std::string s = w2u8(v);
+            std::string s = v;
             bool num = (!q.columns.empty() && isNumericType(q.columns[0].second));
             if (q.wrap == "none") {
                 out = std::string("{") + "\"value\":" + (num ? s : (std::string("\"")+s+"\"")) + "}";
@@ -265,7 +231,7 @@ std::string QueryRouter::handle(const std::string& msg) {
             }
         } else {
             std::cout << "查询执行错误: SQL 执行失败, 查询ID=" << id << "\n";
-            std::cout << "失败SQL=" << w2u8(wsql) << "\n";
+            std::cout << "失败SQL=" << sql << "\n";
             std::cout << odbcErrors(SQL_HANDLE_STMT, stmt) << "\n";
             out = std::string("{\"ok\":false,\"error\":\"exec failed\"}");
         }
@@ -286,9 +252,9 @@ std::string QueryRouter::handle(const std::string& msg) {
             DbClient::instance().closeTemp(hdbc);
             return std::string("{\"ok\":false,\"error\":\"stmt alloc failed\"}");
         }
-        std::wstring wsql = u8tow(q.sql);
+        std::string sql = q.sql;
         std::string out;
-        if (SQLExecDirectW(stmt, (SQLWCHAR*)wsql.c_str(), SQL_NTS) == SQL_SUCCESS) {
+        if (SQLExecDirectA(stmt, (SQLCHAR*)sql.c_str(), SQL_NTS) == SQL_SUCCESS) {
             if (q.wrap == "none") out = "["; else out = std::string("{\"ok\":true,\"data\":[");
             bool firstRow = true;
             for (;;) {
@@ -296,9 +262,9 @@ std::string QueryRouter::handle(const std::string& msg) {
                 if (!firstRow) out += ","; firstRow = false;
                 out += "{";
                 for (size_t i = 0; i < q.columns.size(); ++i) {
-                    wchar_t buf[256]={0}; SQLLEN ind=0;
-                    SQLGetData(stmt, (SQLUSMALLINT)(i+1), SQL_C_WCHAR, buf, sizeof(buf), &ind);
-                    std::string val = w2u8(std::wstring(buf));
+                    char buf[256]={0}; SQLLEN ind=0;
+                    SQLGetData(stmt, (SQLUSMALLINT)(i+1), SQL_C_CHAR, buf, sizeof(buf), &ind);
+                    std::string val = std::string(buf);
                     bool num = isNumericType(q.columns[i].second);
                     out += std::string("\"") + q.columns[i].first + std::string("\":") + (num ? (val.empty()?"0":val) : (std::string("\"")+val+"\""));
                     if (i+1<q.columns.size()) out += ",";
@@ -308,7 +274,7 @@ std::string QueryRouter::handle(const std::string& msg) {
             if (q.wrap == "none") out += "]"; else out += "]}";
         } else {
             std::cout << "查询执行错误: SQL 执行失败, 查询ID=" << id << "\n";
-            std::cout << "失败SQL=" << w2u8(wsql) << "\n";
+            std::cout << "失败SQL=" << sql << "\n";
             std::cout << odbcErrors(SQL_HANDLE_STMT, stmt) << "\n";
             out = std::string("{\"ok\":false,\"error\":\"exec failed\"}");
         }

@@ -15,28 +15,19 @@
 #include "WebSocketServer.h"
 #include "QueryRouter.h"
 
-static std::string w2u8(const std::wstring& ws) {
-    if (ws.empty()) return std::string();
-    int n = WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (n <= 0) return std::string();
-    std::string out;
-    out.resize(n);
-    int len = WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), -1, &out[0], n, nullptr, nullptr);
-    if (len > 0) out.resize(len - 1); else out.clear();
-    return out;
-}
 
 static void runConnectivityTest(DbClient& cli) {
-    std::string line = std::string("Connected: Server=") + w2u8(cli.server);
-    if (!cli.db.empty()) line += std::string(" Database=") + w2u8(cli.db);
-    line += std::string(" Driver=") + w2u8(cli.usedDriver);
-    if (!cli.uid.empty()) line += std::string(" User=") + w2u8(cli.uid); else line += " User=Windows Authentication";
+    std::string line = std::string("Connected: Server=") + cli.server;
+    if (!cli.db.empty()) line += std::string(" Database=") + cli.db;
+    line += std::string(" Driver=") + cli.usedDriver;
+    if (!cli.uid.empty()) line += std::string(" User=") + cli.uid; else line += " User=Windows Authentication";
     std::cout << line << "\n";
-    SQLWCHAR name[256];
-    SQLWCHAR ver[256];
-    SQLGetInfo(cli.dbc, SQL_DBMS_NAME, name, sizeof(name) / sizeof(SQLWCHAR), NULL);
-    SQLGetInfo(cli.dbc, SQL_DBMS_VER, ver, sizeof(ver) / sizeof(SQLWCHAR), NULL);
-    std::cout << "DBMS: " << w2u8(std::wstring(name)) << " " << w2u8(std::wstring(ver)) << "\n";
+    SQLCHAR name[256];
+    SQLCHAR ver[256];
+    SQLSMALLINT n1 = 0, n2 = 0;
+    SQLGetInfo(cli.dbc, SQL_DBMS_NAME, name, sizeof(name), &n1);
+    SQLGetInfo(cli.dbc, SQL_DBMS_VER, ver, sizeof(ver), &n2);
+    std::cout << "DBMS: " << std::string(reinterpret_cast<const char*>(name), n1) << " " << std::string(reinterpret_cast<const char*>(ver), n2) << "\n";
 }
 
 
@@ -44,12 +35,12 @@ int main(int argc, char** argv) {
     //SetConsoleOutputCP(CP_UTF8);
     system("chcp 936");
     DbClient& cli = DbClient::instance();
-    if (!cli.init(L"dbconfig.ini")) { std::cout << "Read config failed\n"; return 1; }
+    if (!cli.init("dbconfig.ini")) { std::cout << "Read config failed\n"; return 1; }
     if (!cli.connect()) { std::cout << "Connection failed\n"; return 1; }
     std::cout << "连接数据库成功"<<std::endl;
     {
-        if (!QueryRouter::instance().loadDir(L"queries")) {
-            QueryRouter::instance().load(L"queries.ini");
+        if (!QueryRouter::instance().loadDir("queries")) {
+            QueryRouter::instance().load("queries.ini");
         }
         std::cout << "加载查询配置: " << QueryRouter::instance().count() << " 条" << "\n";
         bool selftest = false; std::string specified;

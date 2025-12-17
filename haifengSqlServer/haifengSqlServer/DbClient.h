@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <string>
 #include <sql.h>
 #include <sqlext.h>
@@ -11,17 +11,17 @@ public:
     DbClient(DbClient&&) = delete;
     DbClient& operator=(DbClient&&) = delete;
 
-    std::wstring server;
-    std::wstring uid;
-    std::wstring pwd;
-    std::wstring db;
-    std::wstring usedDriver;
+    std::string server;
+    std::string uid;
+    std::string pwd;
+    std::string db;
+    std::string usedDriver;
     SQLHENV env = SQL_NULL_HENV;
     SQLHDBC dbc = SQL_NULL_HDBC;
 
-    bool init(const std::wstring& path);
+    bool init(const std::string& path);
     bool connect();
-    std::wstring execScalar(const wchar_t* sql);
+    std::string execScalar(const char* sql);
     SQLHDBC openTemp();
     void closeTemp(SQLHDBC h);
     void close();

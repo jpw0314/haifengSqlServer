@@ -3,61 +3,50 @@
 #include <string>
 #include "DbClient.h"
 
-static std::wstring u8tow(const std::string& s) {
-    if (s.empty()) return std::wstring();
-    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
-    if (n <= 0) return std::wstring();
-    std::wstring out;
-    out.resize(n);
-    int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &out[0], n);
-    if (len > 0) out.resize(len - 1); else out.clear();
-    return out;
-}
-
 static void printDiag(SQLSMALLINT ht, SQLHANDLE h) {
-    SQLWCHAR state[6];
+    SQLCHAR state[6];
     SQLINTEGER native;
-    SQLWCHAR msg[512];
+    SQLCHAR msg[512];
     SQLSMALLINT len;
     SQLSMALLINT i = 1;
-    while (SQLGetDiagRecW(ht, h, i, state, &native, msg, (SQLSMALLINT)(sizeof(msg) / sizeof(SQLWCHAR)), &len) == SQL_SUCCESS) {
+    while (SQLGetDiagRecA(ht, h, i, state, &native, msg, (SQLSMALLINT)(sizeof(msg)), &len) == SQL_SUCCESS) {
         i++;
     }
 }
 
-static bool tryConnectWith(SQLHDBC dbc, const wchar_t* driver, const std::wstring& server, const std::wstring& uid, const std::wstring& pwd, const std::wstring& db) {
-    SQLWCHAR out[512];
+static bool tryConnectWith(SQLHDBC dbc, const char* driver, const std::string& server, const std::string& uid, const std::string& pwd, const std::string& db) {
+    SQLCHAR out[512];
     SQLSMALLINT outLen = 0;
-    std::wstring serverPart = server;
-    std::wstring drv(driver);
-    if (drv == L"ODBC Driver 18 for SQL Server" || drv == L"ODBC Driver 17 for SQL Server") {
-        if (serverPart.rfind(L"tcp:", 0) != 0) serverPart = L"tcp:" + serverPart;
+    std::string serverPart = server;
+    std::string drv(driver);
+    if (drv == "ODBC Driver 18 for SQL Server" || drv == "ODBC Driver 17 for SQL Server") {
+        if (serverPart.rfind("tcp:", 0) != 0) serverPart = "tcp:" + serverPart;
     }
-    std::wstring cs = std::wstring(L"DRIVER={") + driver + L"};SERVER=" + serverPart;
-    if (!db.empty()) cs += L";Database=" + db;
-    if (std::wstring(driver) == L"SQL Server") {
-        if (!uid.empty() && !pwd.empty()) cs += L";UID=" + uid + L";PWD=" + pwd;
-        else cs += L";Trusted_Connection=yes";
-        cs += L";Network=dbmssocn";
+    std::string cs = std::string("DRIVER={") + driver + "};SERVER=" + serverPart;
+    if (!db.empty()) cs += ";Database=" + db;
+    if (std::string(driver) == "SQL Server") {
+        if (!uid.empty() && !pwd.empty()) cs += ";UID=" + uid + ";PWD=" + pwd;
+        else cs += ";Trusted_Connection=yes";
+        cs += ";Network=dbmssocn";
     } else {
-        if (!uid.empty() && !pwd.empty()) cs += L";UID=" + uid + L";PWD=" + pwd;
-        else cs += L";Trusted_Connection=yes";
-        cs += L";Encrypt=yes;TrustServerCertificate=yes";
+        if (!uid.empty() && !pwd.empty()) cs += ";UID=" + uid + ";PWD=" + pwd;
+        else cs += ";Trusted_Connection=yes";
+        cs += ";Encrypt=yes;TrustServerCertificate=yes";
     }
-    SQLRETURN r = SQLDriverConnectW(dbc, NULL, (SQLWCHAR*)cs.c_str(), SQL_NTS, out, (SQLSMALLINT)(sizeof(out) / sizeof(SQLWCHAR)), &outLen, SQL_DRIVER_NOPROMPT);
+    SQLRETURN r = SQLDriverConnectA(dbc, NULL, (SQLCHAR*)cs.c_str(), SQL_NTS, out, (SQLSMALLINT)(sizeof(out)), &outLen, SQL_DRIVER_NOPROMPT);
     return SQL_SUCCEEDED(r);
 }
 
-static std::wstring execScalarString(SQLHDBC dbc, const wchar_t* sql) {
+static std::string execScalarString(SQLHDBC dbc, const char* sql) {
     SQLHSTMT stmt = SQL_NULL_HSTMT;
-    if (SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt) != SQL_SUCCESS) return std::wstring();
-    std::wstring res;
-    if (SQLExecDirectW(stmt, (SQLWCHAR*)sql, SQL_NTS) == SQL_SUCCESS) {
+    if (SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt) != SQL_SUCCESS) return std::string();
+    std::string res;
+    if (SQLExecDirectA(stmt, (SQLCHAR*)sql, SQL_NTS) == SQL_SUCCESS) {
         if (SQLFetch(stmt) == SQL_SUCCESS) {
-            wchar_t buf[256] = {0};
+            char buf[256] = {0};
             SQLLEN ind = 0;
-            if (SQLGetData(stmt, 1, SQL_C_WCHAR, buf, sizeof(buf), &ind) == SQL_SUCCESS) {
-                res = std::wstring(buf);
+            if (SQLGetData(stmt, 1, SQL_C_CHAR, buf, sizeof(buf), &ind) == SQL_SUCCESS) {
+                res = std::string(buf);
             }
         }
     }
@@ -68,15 +57,8 @@ static std::wstring execScalarString(SQLHDBC dbc, const wchar_t* sql) {
 DbClient& DbClient::instance() { static DbClient inst; return inst; }
 DbClient::DbClient() = default;
 
-bool DbClient::init(const std::wstring& path) {
-    std::ifstream f;
-    int n = WideCharToMultiByte(CP_UTF8, 0, path.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (n > 0) {
-        std::string p; p.resize(n);
-        WideCharToMultiByte(CP_UTF8, 0, path.c_str(), -1, &p[0], n, nullptr, nullptr);
-        if (p.size() && p.back() == '\0') p.pop_back();
-        f.open(p);
-    }
+bool DbClient::init(const std::string& path) {
+    std::ifstream f(path);
     if (!f.is_open()) return false;
     std::string line;
     while (std::getline(f, line)) {
@@ -92,10 +74,10 @@ bool DbClient::init(const std::wstring& path) {
             return s.substr(a, b - a);
         };
         k = trim(k); v = trim(v);
-        if (k == "server") server = u8tow(v);
-        else if (k == "user" || k == "uid") uid = u8tow(v);
-        else if (k == "password" || k == "pwd") pwd = u8tow(v);
-        else if (k == "database" || k == "db") db = u8tow(v);
+        if (k == "server") server = (v);
+        else if (k == "user" || k == "uid") uid = (v);
+        else if (k == "password" || k == "pwd") pwd = (v);
+        else if (k == "database" || k == "db") db = (v);
     }
     return !server.empty();
 }
@@ -107,9 +89,9 @@ bool DbClient::connect() {
     SQLSetConnectAttr(dbc, SQL_LOGIN_TIMEOUT, (SQLPOINTER)5, 0);
     SQLSetConnectAttr(dbc, SQL_ATTR_CONNECTION_TIMEOUT, (SQLPOINTER)10, 0);
     bool ok = false;
-    if (tryConnectWith(dbc, L"ODBC Driver 18 for SQL Server", server, uid, pwd, db)) { ok = true; usedDriver = L"ODBC Driver 18 for SQL Server"; }
-    else if (tryConnectWith(dbc, L"ODBC Driver 17 for SQL Server", server, uid, pwd, db)) { ok = true; usedDriver = L"ODBC Driver 17 for SQL Server"; }
-    else if (tryConnectWith(dbc, L"SQL Server", server, uid, pwd, db)) { ok = true; usedDriver = L"SQL Server"; }
+    if (tryConnectWith(dbc, "ODBC Driver 18 for SQL Server", server, uid, pwd, db)) { ok = true; usedDriver = "ODBC Driver 18 for SQL Server"; }
+    else if (tryConnectWith(dbc, "ODBC Driver 17 for SQL Server", server, uid, pwd, db)) { ok = true; usedDriver = "ODBC Driver 17 for SQL Server"; }
+    else if (tryConnectWith(dbc, "SQL Server", server, uid, pwd, db)) { ok = true; usedDriver = "SQL Server"; }
     if (!ok) {
         printDiag(SQL_HANDLE_DBC, dbc);
         SQLFreeHandle(SQL_HANDLE_DBC, dbc);
@@ -120,7 +102,7 @@ bool DbClient::connect() {
     return true;
 }
 
-std::wstring DbClient::execScalar(const wchar_t* sql) { return execScalarString(dbc, sql); }
+std::string DbClient::execScalar(const char* sql) { return execScalarString(dbc, sql); }
 
 SQLHDBC DbClient::openTemp() {
     if (env == SQL_NULL_HENV) {
@@ -135,9 +117,9 @@ SQLHDBC DbClient::openTemp() {
     if (!usedDriver.empty()) {
         ok = tryConnectWith(h, usedDriver.c_str(), server, uid, pwd, db);
     } else {
-        if (tryConnectWith(h, L"ODBC Driver 18 for SQL Server", server, uid, pwd, db)) ok = true;
-        else if (tryConnectWith(h, L"ODBC Driver 17 for SQL Server", server, uid, pwd, db)) ok = true;
-        else if (tryConnectWith(h, L"SQL Server", server, uid, pwd, db)) ok = true;
+        if (tryConnectWith(h, "ODBC Driver 18 for SQL Server", server, uid, pwd, db)) ok = true;
+        else if (tryConnectWith(h, "ODBC Driver 17 for SQL Server", server, uid, pwd, db)) ok = true;
+        else if (tryConnectWith(h, "SQL Server", server, uid, pwd, db)) ok = true;
     }
     if (!ok) { SQLFreeHandle(SQL_HANDLE_DBC, h); return SQL_NULL_HDBC; }
     return h;
