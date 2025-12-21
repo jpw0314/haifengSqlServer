@@ -1,4 +1,4 @@
-﻿#define WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #ifndef _WINSOCKAPI_
 #define _WINSOCKAPI_
@@ -189,32 +189,38 @@ std::string QueryRouter::handle(const std::string& msg) {
     std::string id = getJsonString(msg, "query");
     if (id.empty()) {
         std::cout << "请求错误: 缺少 query 字段, 原始数据=" << msg << "\n";
-        return std::string("{\"ok\":false,\"error\":\"missing query\"}");
+        return std::string("{\"code\":\"400\",\"message\":\"missing query\",\"data\":{}}");
     }
     auto it = specs.find(id);
     if (it==specs.end()) {
         std::cout << "请求错误: 未知查询ID: " << id << "\n";
-        return std::string("{\"ok\":false,\"error\":\"unknown query\"}");
+        return std::string("{\"code\":\"400\",\"message\":\"unknown query\",\"data\":{}}");
     }
     const QuerySpec& q = it->second;
-    if (q.returns == "scalar") {
-        std::lock_guard<std::mutex> lock(sqlMutex);
-        SQLHDBC hdbc = DbClient::instance().openTemp();
-        if (hdbc == SQL_NULL_HDBC) {
-            std::cout << "查询执行错误: 连接失败, 查询ID=" << id << "\n";
-            return std::string("{\"ok\":false,\"error\":\"connect failed\"}");
-        }
-        SQLHSTMT stmt = SQL_NULL_HSTMT;
-        if (SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &stmt) != SQL_SUCCESS) {
-            std::cout << "查询执行错误: 语句句柄分配失败, 查询ID=" << id << "\n";
-            std::cout << odbcErrors(SQL_HANDLE_DBC, hdbc) << "\n";
-            DbClient::instance().closeTemp(hdbc);
-            return std::string("{\"ok\":false,\"error\":\"stmt alloc failed\"}");
-        }
-        std::string sql =q.sql;
-        std::string v;
-        std::string out;
-        if (SQLExecDirectA(stmt, (SQLCHAR*)sql.c_str(), SQL_NTS) == SQL_SUCCESS) {
+
+    std::lock_guard<std::mutex> lock(sqlMutex);
+    SQLHDBC hdbc = DbClient::instance().openTemp();
+    if (hdbc == SQL_NULL_HDBC) {
+        std::cout << "查询执行错误: 连接失败, 查询ID=" << id << "\n";
+        return std::string("{\"code\":\"400\",\"message\":\"connect failed\",\"data\":{}}");
+    }
+    SQLHSTMT stmt = SQL_NULL_HSTMT;
+    if (SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &stmt) != SQL_SUCCESS) {
+        std::cout << "查询执行错误: 语句句柄分配失败, 查询ID=" << id << "\n";
+        std::cout << odbcErrors(SQL_HANDLE_DBC, hdbc) << "\n";
+        DbClient::instance().closeTemp(hdbc);
+        return std::string("{\"code\":\"400\",\"message\":\"stmt alloc failed\",\"data\":{}}");
+    }
+
+    std::string sql = q.sql;
+    std::string innerJson;
+    bool success = false;
+    std::string errorMsg;
+
+    if (SQLExecDirectA(stmt, (SQLCHAR*)sql.c_str(), SQL_NTS) == SQL_SUCCESS) {
+        success = true;
+        if (q.returns == "scalar") {
+            std::string v;
             if (SQLFetch(stmt) == SQL_SUCCESS) {
                 char buf[256] = {0};
                 SQLLEN ind = 0;
@@ -224,62 +230,39 @@ std::string QueryRouter::handle(const std::string& msg) {
             }
             std::string s = v;
             bool num = (!q.columns.empty() && isNumericType(q.columns[0].second));
-            if (q.wrap == "none") {
-                out = std::string("{") + "\"value\":" + (num ? s : (std::string("\"")+s+"\"")) + "}";
-            } else {
-                out = std::string("{\"ok\":true,\"data\":{") + "\"value\":" + (num ? s : (std::string("\"")+s+"\"")) + "}}";
-            }
+            innerJson = std::string("{") + "\"value\":" + (num ? (s.empty()?"0":s) : (std::string("\"")+s+"\"")) + "}";
         } else {
-            std::cout << "查询执行错误: SQL 执行失败, 查询ID=" << id << "\n";
-            std::cout << "失败SQL=" << sql << "\n";
-            std::cout << odbcErrors(SQL_HANDLE_STMT, stmt) << "\n";
-            out = std::string("{\"ok\":false,\"error\":\"exec failed\"}");
-        }
-        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
-        DbClient::instance().closeTemp(hdbc);
-        return out;
-    } else {
-        std::lock_guard<std::mutex> lock(sqlMutex);
-        SQLHDBC hdbc = DbClient::instance().openTemp();
-        if (hdbc == SQL_NULL_HDBC) {
-            std::cout << "查询执行错误: 连接失败, 查询ID=" << id << "\n";
-            return std::string("{\"ok\":false,\"error\":\"connect failed\"}");
-        }
-        SQLHSTMT stmt = SQL_NULL_HSTMT;
-        if (SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &stmt) != SQL_SUCCESS) {
-            std::cout << "查询执行错误: 语句句柄分配失败, 查询ID=" << id << "\n";
-            std::cout << odbcErrors(SQL_HANDLE_DBC, hdbc) << "\n";
-            DbClient::instance().closeTemp(hdbc);
-            return std::string("{\"ok\":false,\"error\":\"stmt alloc failed\"}");
-        }
-        std::string sql = q.sql;
-        std::string out;
-        if (SQLExecDirectA(stmt, (SQLCHAR*)sql.c_str(), SQL_NTS) == SQL_SUCCESS) {
-            if (q.wrap == "none") out = "["; else out = std::string("{\"ok\":true,\"data\":[");
+            innerJson = "[";
             bool firstRow = true;
             for (;;) {
                 if (SQLFetch(stmt) != SQL_SUCCESS) break;
-                if (!firstRow) out += ","; firstRow = false;
-                out += "{";
+                if (!firstRow) innerJson += ","; firstRow = false;
+                innerJson += "{";
                 for (size_t i = 0; i < q.columns.size(); ++i) {
                     char buf[256]={0}; SQLLEN ind=0;
                     SQLGetData(stmt, (SQLUSMALLINT)(i+1), SQL_C_CHAR, buf, sizeof(buf), &ind);
                     std::string val = std::string(buf);
                     bool num = isNumericType(q.columns[i].second);
-                    out += std::string("\"") + q.columns[i].first + std::string("\":") + (num ? (val.empty()?"0":val) : (std::string("\"")+val+"\""));
-                    if (i+1<q.columns.size()) out += ",";
+                    innerJson += std::string("\"") + q.columns[i].first + std::string("\":") + (num ? (val.empty()?"0":val) : (std::string("\"")+val+"\""));
+                    if (i+1<q.columns.size()) innerJson += ",";
                 }
-                out += "}";
+                innerJson += "}";
             }
-            if (q.wrap == "none") out += "]"; else out += "]}";
-        } else {
-            std::cout << "查询执行错误: SQL 执行失败, 查询ID=" << id << "\n";
-            std::cout << "失败SQL=" << sql << "\n";
-            std::cout << odbcErrors(SQL_HANDLE_STMT, stmt) << "\n";
-            out = std::string("{\"ok\":false,\"error\":\"exec failed\"}");
+            innerJson += "]";
         }
-        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
-        DbClient::instance().closeTemp(hdbc);
-        return out;
+    } else {
+        std::cout << "查询执行错误: SQL 执行失败, 查询ID=" << id << "\n";
+        std::cout << "失败SQL=" << sql << "\n";
+        std::cout << odbcErrors(SQL_HANDLE_STMT, stmt) << "\n";
+        errorMsg = "exec failed";
+    }
+
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+    DbClient::instance().closeTemp(hdbc);
+
+    if (success) {
+        return std::string("{\"code\":\"200\",\"message\":\"") + id + "\",\"data\":" + innerJson + "}";
+    } else {
+        return std::string("{\"code\":\"400\",\"message\":\"") + errorMsg + "\",\"data\":{}}";
     }
 }

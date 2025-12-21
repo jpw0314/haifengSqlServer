@@ -39,8 +39,12 @@ int main(int argc, char** argv) {
     if (!cli.connect()) { std::cout << "Connection failed\n"; return 1; }
     std::cout << "连接数据库成功"<<std::endl;
     {
-        if (!QueryRouter::instance().loadDir("queries")) {
-            QueryRouter::instance().load("queries.ini");
+        if (!QueryRouter::instance().loadDir("queries")) 
+        {
+            QueryRouter::instance().load("overview.ini");
+            QueryRouter::instance().load("production.ini");
+            QueryRouter::instance().load("quality.ini");
+            QueryRouter::instance().load("warehouse.ini");
         }
         std::cout << "加载查询配置: " << QueryRouter::instance().count() << " 条" << "\n";
         bool selftest = false; std::string specified;
@@ -71,6 +75,7 @@ int main(int argc, char** argv) {
             std::cout << "接受的数据内容" << msg << "\n";
             std::string resp = QueryRouter::instance().handle(msg);
             std::cout << "发送响应: socket=" << (uintptr_t)client << ", 长度=" << resp.size() << "\n";
+            std::cout << "发送的数据内容" << resp << std::endl;
             WebSocketServer::sendTextTo(client, resp);
         });
     }
