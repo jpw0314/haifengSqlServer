@@ -13,6 +13,7 @@
 #include <sqlext.h>
 #include "DbClient.h"
 #include "WebSocketServer.h"
+#include "WeatherService.h"
 #include "QueryRouter.h"
 
 
@@ -33,11 +34,17 @@ static void runConnectivityTest(DbClient& cli) {
 
 int main(int argc, char** argv) {
     //SetConsoleOutputCP(CP_UTF8);
-    system("chcp 936");
+    //system("chcp 936");
     DbClient& cli = DbClient::instance();
     if (!cli.init("dbconfig.ini")) { std::cout << "Read config failed\n"; return 1; }
     if (!cli.connect()) { std::cout << "Connection failed\n"; return 1; }
     std::cout << "连接数据库成功"<<std::endl;
+
+    // 测试天气服务
+    std::cout << "正在获取上海的天气信息...\n";
+    std::string weatherInfo = WeatherService::instance().getWeather("guangzhou");
+    std::cout << weatherInfo << "\n";
+
     {
         if (!QueryRouter::instance().loadDir("queries")) 
         {
