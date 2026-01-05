@@ -10,32 +10,33 @@ WeatherService& WeatherService::instance() {
     return instance;
 }
 
+// 使用 WinInet API 执行 HTTP GET 请求
 std::string WeatherService::performGetRequest(const std::string& domain, const std::string& path) {
     HINTERNET hInternet = NULL, hConnect = NULL, hRequest = NULL;
     std::string response;
 
-    // 1. Initialize WinInet
+    // 1. 初始化 WinInet
     hInternet = InternetOpenA("WeatherService/1.0", 
                               INTERNET_OPEN_TYPE_PRECONFIG, 
                               NULL, NULL, 0);
 
     if (hInternet) {
-        // 2. Connect to the server
+        // 2. 连接到服务器 (HTTPS 默认端口)
         hConnect = InternetConnectA(hInternet, domain.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 
                                     NULL, NULL, INTERNET_SERVICE_HTTP, 0, 0);
     }
 
     if (hConnect) {
-        // 3. Create the request
+        // 3. 创建 HTTP 请求
         hRequest = HttpOpenRequestA(hConnect, "GET", path.c_str(),
                                     NULL, NULL, NULL, 
                                     INTERNET_FLAG_SECURE | INTERNET_FLAG_RELOAD, 0);
     }
 
     if (hRequest) {
-        // 4. Send the request
+        // 4. 发送请求
         if (HttpSendRequestA(hRequest, NULL, 0, NULL, 0)) {
-            // 5. Read the response
+            // 5. 读取响应数据
             char buffer[4096];
             DWORD bytesRead = 0;
             while (InternetReadFile(hRequest, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
@@ -44,7 +45,7 @@ std::string WeatherService::performGetRequest(const std::string& domain, const s
         }
     }
 
-    // Cleanup
+    // 清理资源
     if (hRequest) InternetCloseHandle(hRequest);
     if (hConnect) InternetCloseHandle(hConnect);
     if (hInternet) InternetCloseHandle(hInternet);
@@ -52,6 +53,7 @@ std::string WeatherService::performGetRequest(const std::string& domain, const s
     return response;
 }
 
+// 辅助函数：从 JSON 字符串中提取指定键的值
 std::string WeatherService::extractJsonValue(const std::string& json, const std::string& key) {
     std::string searchKey = "\"" + key + "\":";
     size_t pos = json.find(searchKey);
@@ -59,20 +61,20 @@ std::string WeatherService::extractJsonValue(const std::string& json, const std:
 
     pos += searchKey.length();
     
-    // Skip whitespace
+    // 跳过空白字符
     while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n' || json[pos] == '\r')) {
         pos++;
     }
 
     if (pos >= json.length()) return "";
 
-    // Check if value is a string
+    // 如果值是字符串，提取引号内的内容
     if (json[pos] == '\"') {
         size_t end = json.find("\"", pos + 1);
         if (end == std::string::npos) return "";
         return json.substr(pos + 1, end - pos - 1);
     }
-    // Check if value is a number or boolean or null
+    // 如果值是数字、布尔值或 null，直接提取
     else {
         size_t end = pos;
         while (end < json.length() && (isdigit(json[end]) || json[end] == '.' || json[end] == '-' || json[end] == 'e' || json[end] == 'E' || isalpha(json[end]))) {
@@ -82,27 +84,10 @@ std::string WeatherService::extractJsonValue(const std::string& json, const std:
     }
 }
 
-std::string WeatherService::Utf8ToGbk(const std::string& str) {
-    if (str.empty()) return "";
-    
-    // UTF-8 -> Wide
-    int wLen = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, NULL, 0);
-    if (wLen <= 0) return str;
-    std::vector<wchar_t> wBuf(wLen);
-    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, wBuf.data(), wLen);
-
-    // Wide -> GBK (CP_ACP or 936)
-    int aLen = WideCharToMultiByte(CP_ACP, 0, wBuf.data(), -1, NULL, 0, NULL, NULL);
-    if (aLen <= 0) return str;
-    std::vector<char> aBuf(aLen);
-    WideCharToMultiByte(CP_ACP, 0, wBuf.data(), -1, aBuf.data(), aLen, NULL, NULL);
-
-    return std::string(aBuf.data());
-}
-
+// 获取天气信息的主流程
 std::string WeatherService::getWeather(const std::string& city) {
-    // 1. Geocoding: Get Lat/Lon for the city
-    // https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1&language=zh&format=json
+    // 1. 地理编码：获取城市的经纬度
+    // API: https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1&language=zh&format=json
     
     std::string geoDomain = "geocoding-api.open-meteo.com";
     std::string geoPath = "/v1/search?name=" + city + "&count=1&language=zh&format=json";
@@ -111,7 +96,7 @@ std::string WeatherService::getWeather(const std::string& city) {
     
     if (geoResponse.empty()) return "Error: Failed to fetch location data.";
 
-    // Parse Lat/Lon
+    // 解析经纬度
     if (geoResponse.find("\"results\"") == std::string::npos) {
         return "Error: City not found.";
     }
@@ -121,8 +106,8 @@ std::string WeatherService::getWeather(const std::string& city) {
 
     if (lat.empty() || lon.empty()) return "Error: Could not parse location data.";
 
-    // 2. Weather: Get current weather
-    // https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true
+    // 2. 天气查询：根据经纬度获取当前天气
+    // API: https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true
     
     std::string weatherDomain = "api.open-meteo.com";
     std::string weatherPath = "/v1/forecast?latitude=" + lat + "&longitude=" + lon + "&current_weather=true";
@@ -140,7 +125,7 @@ std::string WeatherService::getWeather(const std::string& city) {
     std::string windspeed = extractJsonValue(currentJson, "windspeed");
     std::string code = extractJsonValue(currentJson, "weathercode");
 
-    // Weather codes interpretation
+    // 3. 解析天气代码
     std::string weatherDesc = "Unknown";
     int iCode = -1;
     try {
@@ -156,6 +141,7 @@ std::string WeatherService::getWeather(const std::string& city) {
     else if (iCode >= 80 && iCode <= 82) weatherDesc = "阵雨";
     else if (iCode >= 95) weatherDesc = "雷雨";
     
+    // 4. 格式化输出
     std::stringstream ss;
     ss << "城市: " << city << "\n";
     ss << "天气: " << weatherDesc << "\n";

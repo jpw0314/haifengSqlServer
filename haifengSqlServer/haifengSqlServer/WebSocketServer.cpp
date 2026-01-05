@@ -1,4 +1,4 @@
-﻿#define WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -11,6 +11,7 @@
 #include "WebSocketServer.h"
 #include "ThreadPool.h"
 
+// 辅助函数：从 socket 读取数据直到遇到指定的分隔符
 static std::string readUntil(SOCKET s, const std::string& delim) {
     std::string buf;
     char tmp[1024];
@@ -19,11 +20,12 @@ static std::string readUntil(SOCKET s, const std::string& delim) {
         if (n <= 0) break;
         buf.append(tmp, tmp + n);
         if (buf.find(delim) != std::string::npos) break;
-        if (buf.size() > 1 << 20) break;
+        if (buf.size() > 1 << 20) break; // 防止缓冲区过大
     }
     return buf;
 }
 
+// 辅助函数：解析 HTTP 头部，获取指定字段的值
 static std::string getHeader(const std::string& req, const std::string& name) {
     std::string needle = name + ":";
     size_t p = req.find(needle);
@@ -35,6 +37,7 @@ static std::string getHeader(const std::string& req, const std::string& name) {
     return req.substr(b, e - b);
 }
 
+// 辅助函数：计算 SHA1 哈希并进行 Base64 编码（用于 WebSocket 握手验证）
 static std::string sha1Base64(const std::string& data) {
     BCRYPT_ALG_HANDLE alg = NULL;
     BCRYPT_HASH_HANDLE h = NULL;
@@ -59,6 +62,7 @@ static std::string sha1Base64(const std::string& data) {
 WebSocketServer& WebSocketServer::instance() { static WebSocketServer inst; return inst; }
 WebSocketServer::WebSocketServer() = default;
 
+// 启动单连接模式的服务器（主要用于简单测试）
 bool WebSocketServer::start(uint16_t port) {
     stop();
     WSADATA wsa;
@@ -89,6 +93,7 @@ bool WebSocketServer::start(uint16_t port) {
     return true;
 }
 
+// 监听并处理接收到的 WebSocket 帧（单连接模式）
 void WebSocketServer::listen(std::function<void(const std::string&)> onText) {
     if (c == INVALID_SOCKET) return;
     for (;;) {
@@ -118,15 +123,16 @@ void WebSocketServer::listen(std::function<void(const std::string&)> onText) {
         }
         if (got != payload.size()) break;
         if (mask) { for (size_t i = 0; i < payload.size(); ++i) payload[i] ^= maskingKey[i % 4]; }
-        if (opcode == 0x8) break;
+        if (opcode == 0x8) break; // Close frame
         if (opcode == 0x1 && onText) onText(std::string((const char*)payload.data(), payload.size()));
     }
 }
 
+// 发送文本消息（单连接模式）
 bool WebSocketServer::sendText(const std::string& text) {
     if (c == INVALID_SOCKET) return false;
     std::vector<unsigned char> frame;
-    frame.push_back(0x81);
+    frame.push_back(0x81); // FIN + Text opcode
     size_t len = text.size();
     if (len <= 125) { frame.push_back((unsigned char)len); }
     else if (len <= 65535) { frame.push_back(126); frame.push_back((unsigned char)((len >> 8) & 0xFF)); frame.push_back((unsigned char)(len & 0xFF)); }
@@ -140,10 +146,11 @@ bool WebSocketServer::sendText(const std::string& text) {
     return true;
 }
 
+// 静态方法：向指定客户端发送文本消息
 bool WebSocketServer::sendTextTo(SOCKET client, const std::string& text) {
     if (client == INVALID_SOCKET) return false;
     std::vector<unsigned char> frame;
-    frame.push_back(0x81);
+    frame.push_back(0x81); // FIN + Text opcode
     size_t len = text.size();
     if (len <= 125) { frame.push_back((unsigned char)len); }
     else if (len <= 65535) { frame.push_back(126); frame.push_back((unsigned char)((len >> 8) & 0xFF)); frame.push_back((unsigned char)(len & 0xFF)); }
@@ -157,6 +164,7 @@ bool WebSocketServer::sendTextTo(SOCKET client, const std::string& text) {
     return true;
 }
 
+// 多线程接受连接的主循环
 bool WebSocketServer::acceptLoop(uint16_t port, size_t workers, std::function<void(SOCKET,const std::string&)> onText) {
     stop();
     WSADATA wsa;
@@ -177,6 +185,7 @@ bool WebSocketServer::acceptLoop(uint16_t port, size_t workers, std::function<vo
         char ipbuf[64] = {0};
         inet_ntop(AF_INET, &raddr.sin_addr, ipbuf, sizeof(ipbuf));
         std::cout << "收到连接: socket=" << (uintptr_t)cli << ", 远端=" << ipbuf << ":" << ntohs(raddr.sin_port) << "\n";
+        // 将连接处理任务提交到线程池
         pool.submit([cli, onText]{
             std::string req = readUntil(cli, "\r\n\r\n");
             std::string key = getHeader(req, "Sec-WebSocket-Key");
@@ -217,8 +226,8 @@ bool WebSocketServer::acceptLoop(uint16_t port, size_t workers, std::function<vo
                 }
                 if (got != payload.size()) break;
                 if (mask) { for (size_t i = 0; i < payload.size(); ++i) payload[i] ^= maskingKey[i % 4]; }
-                if (opcode == 0x8) break;
-                if (opcode == 0x1) {
+                if (opcode == 0x8) break; // Close frame
+                if (opcode == 0x1) { // Text frame
                     std::cout << "收到文本: socket=" << (uintptr_t)cli << ", 长度=" << payload.size() << "\n";
                     if (onText) onText(cli, std::string((const char*)payload.data(), payload.size()));
                 }
