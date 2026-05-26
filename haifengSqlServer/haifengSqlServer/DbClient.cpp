@@ -1,4 +1,4 @@
-#include <windows.h>
+﻿#include <windows.h>
 #include <fstream>
 #include <string>
 #include "DbClient.h"
@@ -16,31 +16,70 @@ static void printDiag(SQLSMALLINT ht, SQLHANDLE h) {
 }
 
 // 辅助函数：尝试使用指定的驱动程序连接数据库
-static bool tryConnectWith(SQLHDBC dbc, const char* driver, const std::string& server, const std::string& uid, const std::string& pwd, const std::string& db) {
+//static bool tryConnectWith(SQLHDBC dbc, const char* driver, const std::string& server, const std::string& uid, const std::string& pwd, const std::string& db) {
+//    SQLCHAR out[512];
+//    SQLSMALLINT outLen = 0;
+//    std::string serverPart = server;
+//    std::string drv(driver);
+//    // 针对新版 SQL Server 驱动，确保服务器地址格式正确
+//    if (drv == "ODBC Driver 18 for SQL Server" || drv == "ODBC Driver 17 for SQL Server") {
+//        if (serverPart.rfind("tcp:", 0) != 0) serverPart = "tcp:" + serverPart;
+//    }
+//    // 构建连接字符串
+//    std::string cs = std::string("DRIVER={") + driver + "};SERVER=" + serverPart;
+//    if (!db.empty()) cs += ";Database=" + db;
+//    if (std::string(driver) == "SQL Server") {
+//        // 旧版驱动配置
+//        if (!uid.empty() && !pwd.empty()) cs += ";UID=" + uid + ";PWD=" + pwd;
+//        else cs += ";Trusted_Connection=yes";
+//        cs += ";Network=dbmssocn";
+//    } else {
+//        // 新版驱动配置，增加加密和证书信任设置
+//        if (!uid.empty() && !pwd.empty()) cs += ";UID=" + uid + ";PWD=" + pwd;
+//        else cs += ";Trusted_Connection=yes";
+//        cs += ";Encrypt=yes;TrustServerCertificate=yes";
+//    }
+//    // 尝试连接
+//    SQLRETURN r = SQLDriverConnectA(dbc, NULL, (SQLCHAR*)cs.c_str(), SQL_NTS, out, (SQLSMALLINT)(sizeof(out)), &outLen, SQL_DRIVER_NOPROMPT);
+//    return SQL_SUCCEEDED(r);
+//}
+
+static bool tryConnectWith(SQLHDBC dbc, const char* driver, const std::string& server,
+    const std::string& uid, const std::string& pwd, const std::string& db) {
     SQLCHAR out[512];
     SQLSMALLINT outLen = 0;
     std::string serverPart = server;
     std::string drv(driver);
+
     // 针对新版 SQL Server 驱动，确保服务器地址格式正确
     if (drv == "ODBC Driver 18 for SQL Server" || drv == "ODBC Driver 17 for SQL Server") {
         if (serverPart.rfind("tcp:", 0) != 0) serverPart = "tcp:" + serverPart;
     }
+
     // 构建连接字符串
     std::string cs = std::string("DRIVER={") + driver + "};SERVER=" + serverPart;
+
     if (!db.empty()) cs += ";Database=" + db;
+
+    // 添加字符集设置 - 这是关键！
+    cs += ";Charset=UTF-8";  // 或者用 ";CodePage=65001;" 也可以
+
     if (std::string(driver) == "SQL Server") {
         // 旧版驱动配置
         if (!uid.empty() && !pwd.empty()) cs += ";UID=" + uid + ";PWD=" + pwd;
         else cs += ";Trusted_Connection=yes";
         cs += ";Network=dbmssocn";
-    } else {
+    }
+    else {
         // 新版驱动配置，增加加密和证书信任设置
         if (!uid.empty() && !pwd.empty()) cs += ";UID=" + uid + ";PWD=" + pwd;
         else cs += ";Trusted_Connection=yes";
         cs += ";Encrypt=yes;TrustServerCertificate=yes";
     }
+
     // 尝试连接
-    SQLRETURN r = SQLDriverConnectA(dbc, NULL, (SQLCHAR*)cs.c_str(), SQL_NTS, out, (SQLSMALLINT)(sizeof(out)), &outLen, SQL_DRIVER_NOPROMPT);
+    SQLRETURN r = SQLDriverConnectA(dbc, NULL, (SQLCHAR*)cs.c_str(), SQL_NTS,
+        out, (SQLSMALLINT)(sizeof(out)), &outLen, SQL_DRIVER_NOPROMPT);
     return SQL_SUCCEEDED(r);
 }
 

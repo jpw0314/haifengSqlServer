@@ -185,6 +185,12 @@ bool WebSocketServer::acceptLoop(uint16_t port, size_t workers, std::function<vo
         char ipbuf[64] = {0};
         inet_ntop(AF_INET, &raddr.sin_addr, ipbuf, sizeof(ipbuf));
         std::cout << "收到连接: socket=" << (uintptr_t)cli << ", 远端=" << ipbuf << ":" << ntohs(raddr.sin_port) << "\n";
+
+        // 设置接收超时(60秒)，防止死连接占用线程资源
+        DWORD timeout = 60000;
+        setsockopt(cli, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+        setsockopt(cli, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout, sizeof(timeout));
+
         // 将连接处理任务提交到线程池
         pool.submit([cli, onText]{
             std::string req = readUntil(cli, "\r\n\r\n");
@@ -200,10 +206,17 @@ bool WebSocketServer::acceptLoop(uint16_t port, size_t workers, std::function<vo
             int sn = send(cli, resp.c_str(), (int)resp.size(), 0);
             if (sn <= 0) { closesocket(cli); return; }
             std::cout << "握手成功: socket=" << (uintptr_t)cli << "\n";
+            std::string quitReason = "数据传输异常";
             for (;;) {
                 unsigned char hdr[2];
                 int n = recv(cli, (char*)hdr, 2, 0);
-                if (n <= 0) break;
+                if (n == 0) { quitReason = "客户端主动断开"; break; }
+                if (n < 0) {
+                    int err = WSAGetLastError();
+                    if (err == WSAETIMEDOUT) quitReason = "连接超时";
+                    else quitReason = "Socket错误 " + std::to_string(err);
+                    break;
+                }
                 unsigned char opcode = hdr[0] & 0x0F;
                 bool mask = (hdr[1] & 0x80) != 0;
                 uint64_t len = hdr[1] & 0x7F;
@@ -226,13 +239,13 @@ bool WebSocketServer::acceptLoop(uint16_t port, size_t workers, std::function<vo
                 }
                 if (got != payload.size()) break;
                 if (mask) { for (size_t i = 0; i < payload.size(); ++i) payload[i] ^= maskingKey[i % 4]; }
-                if (opcode == 0x8) break; // Close frame
+                if (opcode == 0x8) { quitReason = "客户端发送关闭帧"; break; } // Close frame
                 if (opcode == 0x1) { // Text frame
                     std::cout << "收到文本: socket=" << (uintptr_t)cli << ", 长度=" << payload.size() << "\n";
                     if (onText) onText(cli, std::string((const char*)payload.data(), payload.size()));
                 }
             }
-            std::cout << "连接关闭: socket=" << (uintptr_t)cli << "\n";
+            std::cout << "连接关闭: socket=" << (uintptr_t)cli << " [" << quitReason << "]\n";
             closesocket(cli);
         });
     }

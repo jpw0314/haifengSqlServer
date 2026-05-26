@@ -93,16 +93,16 @@ int main(int argc, char** argv) {
         }
 
         // 5. 启动 WebSocket 服务器
-        uint16_t port = 8686; size_t workers = 10;
+        uint16_t port = 8686; size_t workers = 50;
         std::cout << "开启监听: 端口=" << port << ", 线程=" << workers << "\n";
         
         // 进入接受连接的循环
         WebSocketServer::instance().acceptLoop(port, workers, [](SOCKET client, const std::string& msg){
-            std::cout << "接受的数据内容" << msg << "\n";
+            std::cout << "发送的数据内容" << msg.c_str() << "\n";
             // 处理接收到的消息（通常是 JSON 格式的查询请求）
             std::string resp = QueryRouter::instance().handle(msg);
             std::cout << "发送响应: socket=" << (uintptr_t)client << ", 长度=" << resp.size() << "\n";
-            std::cout << "发送的数据内容" << resp << std::endl;
+            std::cout << "接受的数据内容" << resp.c_str() << std::endl;
             // 发送响应回客户端
             WebSocketServer::sendTextTo(client, resp);
         });

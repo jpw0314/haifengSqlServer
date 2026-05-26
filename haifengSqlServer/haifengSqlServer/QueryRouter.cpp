@@ -15,6 +15,27 @@
 #include "QueryRouter.h"
 #include "DbClient.h"
 
+std::wstring string_to_wstring(const std::string& str, UINT code_page = CP_UTF8) {
+    if (str.empty()) return L"";
+    
+    int size_needed = MultiByteToWideChar(code_page, 0, str.c_str(), (int)str.size(), NULL, 0);
+    std::wstring wstr(size_needed, 0);
+    MultiByteToWideChar(code_page, 0, str.c_str(), (int)str.size(), &wstr[0], size_needed);
+    return wstr;
+}
+std::string wstring_to_utf8(const std::wstring& wstr) {
+#ifdef _WIN32
+    if (wstr.empty()) return "";
+    int len = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, NULL, 0, NULL, NULL);
+    std::string utf8_str(len, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, &utf8_str[0], len, NULL, NULL);
+    utf8_str.pop_back(); // 移除结尾的 '\0'
+    return utf8_str;
+#else
+    std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+    return converter.to_bytes(wstr);
+#endif
+}
 // 辅助函数：去除字符串两端的空白字符
 static std::string trim(const std::string& s) {
     size_t a = 0; while (a < s.size() && (s[a]==' '||s[a]=='\t' || s[a]=='\r')) a++;
@@ -27,6 +48,25 @@ static bool isNumericType(const std::string& t) {
     std::string s = t;
     std::transform(s.begin(), s.end(), s.begin(), ::tolower);
     return s.rfind("int",0)==0 || s.rfind("decimal",0)==0 || s.rfind("float",0)==0 || s.rfind("double",0)==0;
+}
+
+// 辅助函数：将数据库返回的字符串转换为合法的 JSON 数字格式
+static std::string formatJsonNumber(const std::string& val) {
+    if (val.empty()) return "0";
+    std::string s = val;
+    // 去除两端可能存在的空白（有些驱动会补空格）
+    size_t first = s.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return "0";
+    size_t last = s.find_last_not_of(" \t\r\n");
+    s = s.substr(first, (last - first + 1));
+
+    if (s[0] == '.') return "0" + s;
+    if (s.size() > 1 && s[0] == '-' && s[1] == '.') return "-0" + s.substr(1);
+    
+    // 检查是否包含数字
+    bool hasDigit = false;
+    for (char c : s) { if (isdigit(c)) { hasDigit = true; break; } }
+    return hasDigit ? s : "0";
 }
 
 QueryRouter& QueryRouter::instance() { static QueryRouter inst; return inst; }
@@ -184,23 +224,22 @@ std::string QueryRouter::handle(const std::string& msg) {
     std::string innerJson;
     bool success = false;
     std::string errorMsg;
-
+    std::wstring wsql = string_to_wstring(sql);
     // 执行 SQL 语句
-    if (SQLExecDirectA(stmt, (SQLCHAR*)sql.c_str(), SQL_NTS) == SQL_SUCCESS) {
+    if (SQLExecDirectW(stmt, (SQLWCHAR*)wsql.c_str(), SQL_NTS) == SQL_SUCCESS) {
         success = true;
         // 标量查询：只返回第一行第一列
         if (q.returns == "scalar") {
             std::string v;
             if (SQLFetch(stmt) == SQL_SUCCESS) {
-                char buf[256] = {0};
+                SQLWCHAR buf[512] = {0};
                 SQLLEN ind = 0;
-                if (SQLGetData(stmt, 1, SQL_C_CHAR, buf, sizeof(buf), &ind) == SQL_SUCCESS) {
-                    v = std::string(buf);
+                if (SQLGetData(stmt, 1, SQL_C_WCHAR, buf, sizeof(buf), &ind) == SQL_SUCCESS) {
+                    if (ind != SQL_NULL_DATA) v = wstring_to_utf8(std::wstring(buf));
                 }
             }
-            std::string s = v;
             bool num = (!q.columns.empty() && isNumericType(q.columns[0].second));
-            innerJson = std::string("{") + "\"value\":" + (num ? (s.empty()?"0":s) : (std::string("\"")+s+"\"")) + "}";
+            innerJson = std::string("{") + "\"value\":" + (num ? formatJsonNumber(v) : (std::string("\"")+v+"\"")) + "}";
         } else if (q.returnFormat == "chart_columns" || q.returnFormat == "chart_matrix") {
             // 图表列式查询：将每一列的数据分别组织成数组
             std::vector<std::string> colArrays(q.columns.size(), "[");
@@ -213,22 +252,25 @@ std::string QueryRouter::handle(const std::string& msg) {
                 firstRow = false;
                 
                 for (size_t i = 0; i < q.columns.size(); ++i) {
-                    char buf[256]={0}; SQLLEN ind=0;
-                    SQLGetData(stmt, (SQLUSMALLINT)(i+1), SQL_C_CHAR, buf, sizeof(buf), &ind);
-                    std::string val = std::string(buf);
+                    SQLWCHAR buf[512]={0};
+                    SQLLEN ind=0;
+                    SQLGetData(stmt, (SQLUSMALLINT)(i+1), SQL_C_WCHAR, buf, sizeof(buf) , &ind);
+                    std::string val;
+                    if (ind != SQL_NULL_DATA) val = wstring_to_utf8(std::wstring(buf));
+                    
                     bool num = isNumericType(q.columns[i].second);
-                    colArrays[i] += (num ? (val.empty()?"0":val) : (std::string("\"")+val+"\""));
+                    if (num) {
+                        colArrays[i] += formatJsonNumber(val);
+                    } else {
+                        colArrays[i] += "\"" + val + "\"";
+                    }
                 }
             }
             for(auto& s : colArrays) s += "]";
 
             innerJson = "{";
             if (q.returnFormat == "chart_matrix") {
-                // 矩阵格式：第一列作为 x 轴，其余列放入 values 数组中
                 if (!q.columns.empty()) {
-                    // 使用配置中的列名作为key，或者默认使用 "x" ? 
-                    // 用户需求中，出库分析示例.json 使用 "x"。
-                    // 如果配置了列名，我们优先使用列名。
                     innerJson += "\"" + q.columns[0].first + "\":" + colArrays[0];
                     if (q.columns.size() > 1) {
                         innerJson += ",\"values\":[";
@@ -240,7 +282,6 @@ std::string QueryRouter::handle(const std::string& msg) {
                     }
                 }
             } else {
-                // 普通列式：每一列作为一个数组，key 为列名
                 for(size_t i=0; i<q.columns.size(); ++i) {
                     if (i > 0) innerJson += ",";
                     innerJson += "\"" + q.columns[i].first + "\":" + colArrays[i];
@@ -252,12 +293,15 @@ std::string QueryRouter::handle(const std::string& msg) {
              if (SQLFetch(stmt) == SQL_SUCCESS) {
                 innerJson = "{";
                 for (size_t i = 0; i < q.columns.size(); ++i) {
-                    char buf[256]={0}; SQLLEN ind=0;
-                    SQLGetData(stmt, (SQLUSMALLINT)(i+1), SQL_C_CHAR, buf, sizeof(buf), &ind);
-                    std::string val = std::string(buf);
+                    SQLWCHAR buf[512]={0};
+                    SQLLEN ind=0;
+                    SQLGetData(stmt, (SQLUSMALLINT)(i+1), SQL_C_WCHAR, buf, sizeof(buf), &ind);
+                    std::string val;
+                    if (ind != SQL_NULL_DATA) val = wstring_to_utf8(std::wstring(buf));
+                    
                     bool num = isNumericType(q.columns[i].second);
                     if (i > 0) innerJson += ",";
-                    innerJson += std::string("\"") + q.columns[i].first + std::string("\":") + (num ? (val.empty()?"0":val) : (std::string("\"")+val+"\""));
+                    innerJson += std::string("\"") + q.columns[i].first + std::string("\":") + (num ? formatJsonNumber(val) : (std::string("\"")+val+"\""));
                 }
                 innerJson += "}";
              } else {
@@ -272,12 +316,14 @@ std::string QueryRouter::handle(const std::string& msg) {
                 if (!firstRow) innerJson += ","; firstRow = false;
                 innerJson += "{";
                 for (size_t i = 0; i < q.columns.size(); ++i) {
-                    char buf[256]={0}; SQLLEN ind=0;
-                    SQLGetData(stmt, (SQLUSMALLINT)(i+1), SQL_C_CHAR, buf, sizeof(buf), &ind);
-                    std::string val = std::string(buf);
+                    SQLWCHAR buf[512]={0}; SQLLEN ind=0;
+                    SQLGetData(stmt, (SQLUSMALLINT)(i+1), SQL_C_WCHAR, buf, sizeof(buf), &ind);
+                    std::string val;
+                    if (ind != SQL_NULL_DATA) val = wstring_to_utf8(std::wstring(buf));
+                    
                     bool num = isNumericType(q.columns[i].second);
-                    innerJson += std::string("\"") + q.columns[i].first + std::string("\":") + (num ? (val.empty()?"0":val) : (std::string("\"")+val+"\""));
-                    if (i+1<q.columns.size()) innerJson += ",";
+                    if (i > 0) innerJson += ",";
+                    innerJson += std::string("\"") + q.columns[i].first + std::string("\":") + (num ? formatJsonNumber(val) : (std::string("\"")+val+"\""));
                 }
                 innerJson += "}";
             }
@@ -293,9 +339,14 @@ std::string QueryRouter::handle(const std::string& msg) {
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
     DbClient::instance().closeTemp(hdbc);
 
+    std::string datatype = "object";
+    if (q.returnFormat == "list" || (q.returnFormat != "object" && q.returnFormat != "chart_columns" && q.returnFormat != "chart_matrix" && q.returns != "scalar")) {
+        datatype = "list";
+    }
+
     if (success) {
-        return std::string("{\"code\":\"200\",\"message\":\"") + id + "\",\"data\":" + innerJson + "}";
+        return std::string("{\"code\":\"200\",\"message\":\"") + id + "\",\"datatype\":\"" + datatype + "\",\"data\":" + innerJson + "}";
     } else {
-        return std::string("{\"code\":\"400\",\"message\":\"") + errorMsg + "\",\"data\":{}}";
+        return std::string("{\"code\":\"400\",\"message\":\"") + errorMsg + "\",\"datatype\":\"object\",\"data\":{}}";
     }
 }

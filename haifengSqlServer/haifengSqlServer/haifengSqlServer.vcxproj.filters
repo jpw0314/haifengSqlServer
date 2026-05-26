@@ -47,5 +47,8 @@
     <ClInclude Include="QueryRouter.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="WeatherService.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
