@@ -1,4 +1,4 @@
-#define WIN32_LEAN_AND_MEAN
+﻿#define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -241,7 +241,6 @@ bool WebSocketServer::acceptLoop(uint16_t port, size_t workers, std::function<vo
                 if (mask) { for (size_t i = 0; i < payload.size(); ++i) payload[i] ^= maskingKey[i % 4]; }
                 if (opcode == 0x8) { quitReason = "客户端发送关闭帧"; break; } // Close frame
                 if (opcode == 0x1) { // Text frame
-                    std::cout << "收到文本: socket=" << (uintptr_t)cli << ", 长度=" << payload.size() << "\n";
                     if (onText) onText(cli, std::string((const char*)payload.data(), payload.size()));
                 }
             }

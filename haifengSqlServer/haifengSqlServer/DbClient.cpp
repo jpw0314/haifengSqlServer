@@ -1,89 +1,42 @@
-﻿#include <windows.h>
+#include <windows.h>
 #include <fstream>
 #include <string>
 #include "DbClient.h"
 
-// 辅助函数：打印 ODBC 诊断信息（错误信息）
-static void printDiag(SQLSMALLINT ht, SQLHANDLE h) {
-    SQLCHAR state[6];
-    SQLINTEGER native;
-    SQLCHAR msg[512];
-    SQLSMALLINT len;
-    SQLSMALLINT i = 1;
-    while (SQLGetDiagRecA(ht, h, i, state, &native, msg, (SQLSMALLINT)(sizeof(msg)), &len) == SQL_SUCCESS) {
-        i++;
-    }
-}
-
-// 辅助函数：尝试使用指定的驱动程序连接数据库
-//static bool tryConnectWith(SQLHDBC dbc, const char* driver, const std::string& server, const std::string& uid, const std::string& pwd, const std::string& db) {
-//    SQLCHAR out[512];
-//    SQLSMALLINT outLen = 0;
-//    std::string serverPart = server;
-//    std::string drv(driver);
-//    // 针对新版 SQL Server 驱动，确保服务器地址格式正确
-//    if (drv == "ODBC Driver 18 for SQL Server" || drv == "ODBC Driver 17 for SQL Server") {
-//        if (serverPart.rfind("tcp:", 0) != 0) serverPart = "tcp:" + serverPart;
-//    }
-//    // 构建连接字符串
-//    std::string cs = std::string("DRIVER={") + driver + "};SERVER=" + serverPart;
-//    if (!db.empty()) cs += ";Database=" + db;
-//    if (std::string(driver) == "SQL Server") {
-//        // 旧版驱动配置
-//        if (!uid.empty() && !pwd.empty()) cs += ";UID=" + uid + ";PWD=" + pwd;
-//        else cs += ";Trusted_Connection=yes";
-//        cs += ";Network=dbmssocn";
-//    } else {
-//        // 新版驱动配置，增加加密和证书信任设置
-//        if (!uid.empty() && !pwd.empty()) cs += ";UID=" + uid + ";PWD=" + pwd;
-//        else cs += ";Trusted_Connection=yes";
-//        cs += ";Encrypt=yes;TrustServerCertificate=yes";
-//    }
-//    // 尝试连接
-//    SQLRETURN r = SQLDriverConnectA(dbc, NULL, (SQLCHAR*)cs.c_str(), SQL_NTS, out, (SQLSMALLINT)(sizeof(out)), &outLen, SQL_DRIVER_NOPROMPT);
-//    return SQL_SUCCEEDED(r);
-//}
-
-static bool tryConnectWith(SQLHDBC dbc, const char* driver, const std::string& server,
+static bool tryConnectWith(SQLHDBC dbc, const char* driver, const std::string& server, const std::string& port,
     const std::string& uid, const std::string& pwd, const std::string& db) {
     SQLCHAR out[512];
     SQLSMALLINT outLen = 0;
     std::string serverPart = server;
+    if (!port.empty()) {
+        serverPart += "," + port;
+    }
     std::string drv(driver);
 
-    // 针对新版 SQL Server 驱动，确保服务器地址格式正确
     if (drv == "ODBC Driver 18 for SQL Server" || drv == "ODBC Driver 17 for SQL Server") {
         if (serverPart.rfind("tcp:", 0) != 0) serverPart = "tcp:" + serverPart;
     }
 
-    // 构建连接字符串
     std::string cs = std::string("DRIVER={") + driver + "};SERVER=" + serverPart;
 
     if (!db.empty()) cs += ";Database=" + db;
 
-    // 添加字符集设置 - 这是关键！
-    cs += ";Charset=UTF-8";  // 或者用 ";CodePage=65001;" 也可以
+    cs += ";Charset=UTF-8";
 
     if (std::string(driver) == "SQL Server") {
-        // 旧版驱动配置
         if (!uid.empty() && !pwd.empty()) cs += ";UID=" + uid + ";PWD=" + pwd;
         else cs += ";Trusted_Connection=yes";
         cs += ";Network=dbmssocn";
-    }
-    else {
-        // 新版驱动配置，增加加密和证书信任设置
+    } else {
         if (!uid.empty() && !pwd.empty()) cs += ";UID=" + uid + ";PWD=" + pwd;
         else cs += ";Trusted_Connection=yes";
         cs += ";Encrypt=yes;TrustServerCertificate=yes";
     }
 
-    // 尝试连接
-    SQLRETURN r = SQLDriverConnectA(dbc, NULL, (SQLCHAR*)cs.c_str(), SQL_NTS,
-        out, (SQLSMALLINT)(sizeof(out)), &outLen, SQL_DRIVER_NOPROMPT);
+    SQLRETURN r = SQLDriverConnectA(dbc, NULL, (SQLCHAR*)cs.c_str(), SQL_NTS, out, (SQLSMALLINT)(sizeof(out)), &outLen, SQL_DRIVER_NOPROMPT);
     return SQL_SUCCEEDED(r);
 }
 
-// 辅助函数：执行 SQL 查询并返回第一行第一列的字符串结果
 static std::string execScalarString(SQLHDBC dbc, const char* sql) {
     SQLHSTMT stmt = SQL_NULL_HSTMT;
     if (SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt) != SQL_SUCCESS) return std::string();
@@ -104,14 +57,13 @@ static std::string execScalarString(SQLHDBC dbc, const char* sql) {
 DbClient& DbClient::instance() { static DbClient inst; return inst; }
 DbClient::DbClient() = default;
 
-// 从配置文件加载数据库连接参数
 bool DbClient::init(const std::string& path) {
     std::ifstream f(path);
     if (!f.is_open()) return false;
     std::string line;
     while (std::getline(f, line)) {
         if (line.empty()) continue;
-        if (line[0] == '#' || line[0] == ';') continue; // 跳过注释
+        if (line[0] == '#' || line[0] == ';') continue;
         size_t eq = line.find('=');
         if (eq == std::string::npos) continue;
         std::string k = line.substr(0, eq);
@@ -123,6 +75,7 @@ bool DbClient::init(const std::string& path) {
         };
         k = trim(k); v = trim(v);
         if (k == "server") server = (v);
+        else if (k == "port") port = (v);
         else if (k == "user" || k == "uid") uid = (v);
         else if (k == "password" || k == "pwd") pwd = (v);
         else if (k == "database" || k == "db") db = (v);
@@ -130,20 +83,26 @@ bool DbClient::init(const std::string& path) {
     return !server.empty();
 }
 
-// 初始化 ODBC 环境并建立连接
 bool DbClient::connect() {
     if (SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env) != SQL_SUCCESS) return false;
     SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (void*)SQL_OV_ODBC3, 0);
-    if (SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc) != SQL_SUCCESS) { SQLFreeHandle(SQL_HANDLE_ENV, env); return false; }
+    if (SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc) != SQL_SUCCESS) {
+        SQLFreeHandle(SQL_HANDLE_ENV, env);
+        return false;
+    }
     SQLSetConnectAttr(dbc, SQL_LOGIN_TIMEOUT, (SQLPOINTER)5, 0);
     SQLSetConnectAttr(dbc, SQL_ATTR_CONNECTION_TIMEOUT, (SQLPOINTER)10, 0);
     bool ok = false;
-    // 依次尝试多种驱动程序
-    if (tryConnectWith(dbc, "ODBC Driver 18 for SQL Server", server, uid, pwd, db)) { ok = true; usedDriver = "ODBC Driver 18 for SQL Server"; }
-    else if (tryConnectWith(dbc, "ODBC Driver 17 for SQL Server", server, uid, pwd, db)) { ok = true; usedDriver = "ODBC Driver 17 for SQL Server"; }
-    else if (tryConnectWith(dbc, "SQL Server", server, uid, pwd, db)) { ok = true; usedDriver = "SQL Server"; }
+    if (tryConnectWith(dbc, "ODBC Driver 18 for SQL Server", server, port, uid, pwd, db)) {
+        ok = true;
+        usedDriver = "ODBC Driver 18 for SQL Server";
+    } else if (tryConnectWith(dbc, "ODBC Driver 17 for SQL Server", server, port, uid, pwd, db)) {
+        ok = true;
+        usedDriver = "ODBC Driver 17 for SQL Server";
+    } else if (tryConnectWith(dbc, "SQL Server", server, port, uid, pwd, db)) {
+        ok = true; usedDriver = "SQL Server";
+    }
     if (!ok) {
-        printDiag(SQL_HANDLE_DBC, dbc);
         SQLFreeHandle(SQL_HANDLE_DBC, dbc);
         SQLFreeHandle(SQL_HANDLE_ENV, env);
         dbc = SQL_NULL_HDBC; env = SQL_NULL_HENV;
@@ -154,7 +113,6 @@ bool DbClient::connect() {
 
 std::string DbClient::execScalar(const char* sql) { return execScalarString(dbc, sql); }
 
-// 创建一个新的临时数据库连接（通常用于线程池中的工作线程）
 SQLHDBC DbClient::openTemp() {
     if (env == SQL_NULL_HENV) {
         if (SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env) != SQL_SUCCESS) return SQL_NULL_HDBC;
@@ -165,13 +123,12 @@ SQLHDBC DbClient::openTemp() {
     SQLSetConnectAttr(h, SQL_LOGIN_TIMEOUT, (SQLPOINTER)5, 0);
     SQLSetConnectAttr(h, SQL_ATTR_CONNECTION_TIMEOUT, (SQLPOINTER)10, 0);
     bool ok = false;
-    // 使用主连接成功连接过的驱动程序
     if (!usedDriver.empty()) {
-        ok = tryConnectWith(h, usedDriver.c_str(), server, uid, pwd, db);
+        ok = tryConnectWith(h, usedDriver.c_str(), server, port, uid, pwd, db);
     } else {
-        if (tryConnectWith(h, "ODBC Driver 18 for SQL Server", server, uid, pwd, db)) ok = true;
-        else if (tryConnectWith(h, "ODBC Driver 17 for SQL Server", server, uid, pwd, db)) ok = true;
-        else if (tryConnectWith(h, "SQL Server", server, uid, pwd, db)) ok = true;
+        if (tryConnectWith(h, "ODBC Driver 18 for SQL Server", server, port, uid, pwd, db)) ok = true;
+        else if (tryConnectWith(h, "ODBC Driver 17 for SQL Server", server, port, uid, pwd, db)) ok = true;
+        else if (tryConnectWith(h, "SQL Server", server, port, uid, pwd, db)) ok = true;
     }
     if (!ok) { SQLFreeHandle(SQL_HANDLE_DBC, h); return SQL_NULL_HDBC; }
     return h;

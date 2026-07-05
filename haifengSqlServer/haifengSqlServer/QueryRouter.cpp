@@ -12,6 +12,7 @@
 #include <fstream>
 #include <algorithm>
 #include <mutex>
+#include <cmath>
 #include "QueryRouter.h"
 #include "DbClient.h"
 
@@ -50,7 +51,7 @@ static bool isNumericType(const std::string& t) {
     return s.rfind("int",0)==0 || s.rfind("decimal",0)==0 || s.rfind("float",0)==0 || s.rfind("double",0)==0;
 }
 
-// 辅助函数：将数据库返回的字符串转换为合法的 JSON 数字格式
+// 辅助函数：将数据库返回的字符串转换为合法的 JSON 数字格式，并保留最多两位小数
 static std::string formatJsonNumber(const std::string& val) {
     if (val.empty()) return "0";
     std::string s = val;
@@ -60,13 +61,97 @@ static std::string formatJsonNumber(const std::string& val) {
     size_t last = s.find_last_not_of(" \t\r\n");
     s = s.substr(first, (last - first + 1));
 
-    if (s[0] == '.') return "0" + s;
-    if (s.size() > 1 && s[0] == '-' && s[1] == '.') return "-0" + s.substr(1);
+    if (s[0] == '.') s = "0" + s;
+    if (s.size() > 1 && s[0] == '-' && s[1] == '.') s = "-0" + s.substr(1);
     
     // 检查是否包含数字
     bool hasDigit = false;
     for (char c : s) { if (isdigit(c)) { hasDigit = true; break; } }
-    return hasDigit ? s : "0";
+    if (!hasDigit) return "0";
+
+    // 直接在字符串层面处理小数位数，避免浮点数精度问题
+    size_t dotPos = s.find('.');
+    if (dotPos == std::string::npos) {
+        // 没有小数部分，直接返回
+        return s;
+    }
+
+    // 有小数部分，进行四舍五入到两位小数
+    std::string intPart = s.substr(0, dotPos);
+    std::string fracPart = s.substr(dotPos + 1);
+
+    // 截取或补全到至少两位小数
+    while (fracPart.length() < 2) {
+        fracPart += "0";
+    }
+
+    // 四舍五入处理：取前3位小数来判断
+    char thirdDigit = '0';
+    if (fracPart.length() >= 3) {
+        thirdDigit = fracPart[2];
+    }
+
+    // 截取前两位小数
+    std::string newFrac = fracPart.substr(0, 2);
+
+    // 判断是否需要进位
+    bool needCarry = (thirdDigit >= '5');
+    if (needCarry) {
+        // 从最后一位开始进位
+        int i = 1; // 从第二位小数开始
+        while (i >= 0 && needCarry) {
+            if (newFrac[i] < '9') {
+                newFrac[i]++;
+                needCarry = false;
+            } else {
+                newFrac[i] = '0';
+                if (i == 0) {
+                    // 小数部分全进位了，需要进位到整数部分
+                    // 解析整数部分并加1
+                    long long intVal = 0;
+                    try {
+                        intVal = std::stoll(intPart);
+                    } catch (...) {
+                        // 如果整数部分太大，就不进位了
+                        needCarry = false;
+                    }
+                    if (needCarry) {
+                        if (intVal < 0) {
+                            intVal--;
+                        } else {
+                            intVal++;
+                        }
+                        intPart = std::to_string(intVal);
+                        needCarry = false;
+                    }
+                }
+            }
+            i--;
+        }
+    }
+
+    // 构建最终结果
+    std::string result = intPart;
+
+    // 检查小数部分是否都是0
+    bool allZero = true;
+    for (char c : newFrac) {
+        if (c != '0') {
+            allZero = false;
+            break;
+        }
+    }
+
+    if (!allZero) {
+        result += ".";
+        result += newFrac;
+        // 去除末尾的0（例如 99.50 -> 99.5）
+        if (result.back() == '0') {
+            result.pop_back();
+        }
+    }
+
+    return result;
 }
 
 QueryRouter& QueryRouter::instance() { static QueryRouter inst; return inst; }

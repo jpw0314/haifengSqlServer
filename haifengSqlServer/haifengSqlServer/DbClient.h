@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <string>
 #include <sql.h>
 #include <sqlext.h>
@@ -16,6 +16,7 @@ public:
 
     // 连接配置信息
     std::string server;
+    std::string port;
     std::string uid;
     std::string pwd;
     std::string db;

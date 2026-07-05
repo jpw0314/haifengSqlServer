@@ -22,6 +22,7 @@
 // 运行数据库连接性测试，打印连接信息和 DBMS 版本
 static void runConnectivityTest(DbClient& cli) {
     std::string line = std::string("Connected: Server=") + cli.server;
+    if (!cli.port.empty()) line += ":" + cli.port;
     if (!cli.db.empty()) line += std::string(" Database=") + cli.db;
     line += std::string(" Driver=") + cli.usedDriver;
     if (!cli.uid.empty()) line += std::string(" User=") + cli.uid; else line += " User=Windows Authentication";
@@ -43,8 +44,15 @@ int main(int argc, char** argv) {
 
     // 1. 初始化并连接数据库
     DbClient& cli = DbClient::instance();
-    if (!cli.init("dbconfig.ini")) { std::cout << "Read config failed\n"; return 1; }
-    if (!cli.connect()) { std::cout << "Connection failed\n"; return 1; }
+    if (!cli.init("dbconfig.ini"))
+    {
+        std::cout << "Read config failed\n"; return 1;
+    }
+    std::cout << "Read config succeeded\n";
+    if (!cli.connect())
+    {
+        std::cout << "Connection failed\n"; return 1;
+    }
     std::cout << "连接数据库成功"<<std::endl;
 
     // 2. 测试天气服务功能
@@ -98,11 +106,11 @@ int main(int argc, char** argv) {
         
         // 进入接受连接的循环
         WebSocketServer::instance().acceptLoop(port, workers, [](SOCKET client, const std::string& msg){
-            std::cout << "发送的数据内容" << msg.c_str() << "\n";
+            //std::cout << "发送的数据内容" << msg.c_str() << "\n";
             // 处理接收到的消息（通常是 JSON 格式的查询请求）
             std::string resp = QueryRouter::instance().handle(msg);
             std::cout << "发送响应: socket=" << (uintptr_t)client << ", 长度=" << resp.size() << "\n";
-            std::cout << "接受的数据内容" << resp.c_str() << std::endl;
+            std::cout << "发送给UE" << resp.c_str() << std::endl;
             // 发送响应回客户端
             WebSocketServer::sendTextTo(client, resp);
         });
